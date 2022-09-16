@@ -24,10 +24,7 @@ download.file("http://ftp.ensemblgenomes.org/pub/release-51/metazoa/gtf/drosophi
 
 R.utils::gunzip("Drosophila_melanogaster.BDGP6.32.51.chr.gtf.gz", remove=F)
 
-annotation_object <- rtracklayer::import("Drosophila_melanogaster.BDGP6.32.51.chr.gtf.gz", format = "gtf")             
-
 R.utils::gunzip("Drosophila_melanogaster.BDGP6.32.cdna.all.fa.gz", remove=F)
-transcriptome_object <- rtracklayer::import("Drosophila_melanogaster.BDGP6.32.cdna.all.fa.gz", format = "fasta")             
 
 #### 2. retrieve intergenic information ####
 
@@ -40,6 +37,7 @@ list_intergenic_release()
 # * Verify which species are available for the current Bgee intergenic release. How many exist?------
 
 bgee <- new("BgeeMetadata")
+
 list_bgee_ref_intergenic_species(myBgeeMetadata = bgee)
 
 # There are fifty-two species available for the current Bgee intergenic release.
@@ -81,8 +79,10 @@ user_BgeeCall <- setOutputDir(user_BgeeCall, file.path(outputdir_path, "SRX10927
 user_BgeeCall <- setWorkingPath(user_BgeeCall, working_path)
 
 # * Generate the present and absent calls for the library SRX109278 by using generate_calls_workflow() ####                              
+
 calls_output <- generate_calls_workflow(abundanceMetadata = kallisto,
                                         userMetadata = user_BgeeCall)
+
 # * What happens if the argument reads_size is not specified by you when you create the new userMetadata object? What can be the impact in general? ####
 
 # The reads_size will be set by default as 51 if it is not specified.
@@ -107,6 +107,8 @@ id_intergenic <- read.table(file.path(working_path, "intergenic_1.0", "7227", "i
 
 tpm_intergenic <- tpm_result[match(id_intergenic$intergenic_ids, tpm_result$target_id), "tpm"]
 tpm_intergenic <- tpm_intergenic[tpm_intergenic > 0]
+
+## plot the frequency of pvalues for this library
 
 ggplot(calls_result) +
   geom_freqpoly(data = filter(calls_result, counts > 0), aes(x=pValue), bins = 50)
@@ -162,17 +164,57 @@ get_summary_stats(userFile = file.path(working_path, "userMetadataTemplate_mergi
 
 # * Plot the proportion of protein coding genes of all libraries for each p-value cut-off. ---------
 
+## obtain the summary data of all libraries at p-value cutoff = 0.05
+
 summary_stats <- read.table(file.path(outputdir_path, "multiple_libs", "summary_Stats_All_Libraries.tsv"), sep = "\t", header = TRUE)
 
-plot(summary_stats$proportionCodingPresent)
+## plot the proportions at p-value cutoff = 0.05
+
+data_summ <- summary_stats
+
+ggplot(data_summ)+
+  geom_point(aes(x=factor(libraryId), y=proportionCodingPresent))
+
+## Run the generation of present and absent calls again for pvalue cutoff = 0.01
+
+kallisto@cutoff <- 0.01
+
+calls_output_all <- generate_calls_workflow(abundanceMetadata = kallisto, 
+                                            userFile = file.path(working_path, "userMetadataTemplate.tsv"))
+
+## Get summary stats of all libraries by using get_summary_stats() function again
+
+get_summary_stats(userFile = file.path(working_path, "userMetadataTemplate_merging.tsv"), outDir = file.path(outputdir_path, "multiple_libs"))
+
+## obtain the summary data of all libraries at p-value cutoff = 0.01
+
+summary_stats <- read.table(file.path(outputdir_path, "multiple_libs", "summary_Stats_All_Libraries.tsv"), sep = "\t", header = TRUE)
+
+data_summ <- rbind(data_summ, summary_stats)
+
+## plot the proportions at p-value cutoff = 0.05 or 0.01
+
+data_summ <- summary_stats
+
+ggplot(data_summ)+
+  geom_point(aes(x=factor(libraryId), y=proportionCodingPresent, color=factor(cutoff)))
 
 #### 6. Downstream analysis####
 
 # * Perform a differential expression analysis between different developmental stage conditions.---------
 
+library(edgeR)
+
+## select the samples for differential epression analysis
+
 sample_name <- c("SRX109278", "SRX109279", "SRX1720957", "SRX1720958")
+
+## read the count data from each library
+
 data_count <- matrix(ncol=4, nrow = unique(summary_stats$numberCoding))
 for(i in 1:4){
+  
+  ## use the data from coding genes
   
   calls_result <- read.table(file.path(outputdir_path, sample_name[i], "gene_level_abundance+calls.tsv"), header = TRUE, sep = "\t")
   count <- calls_result[calls_result$biotype=="protein_coding", c("id", "counts")]
@@ -183,6 +225,7 @@ for(i in 1:4){
     rownames(data_count) <- calls_result[calls_result$biotype=="protein_coding", c("id")]
     
   } else {
+    ## merge the counts according to the genes id.
     data_count[, i] <- count[match(rownames(data_count), count[, "id"]), "counts"]
   }
   
@@ -194,15 +237,15 @@ head(data_count)
 write.csv(data_count, file.path(outputdir_path, "DEA", "counts_FBdv_vs_UBERON.csv"), 
             row.names = TRUE)
 
+## conditions to be considered in the analysis
+
 condition <- factor(c(rep("FBdv:00007079", 2), rep("UBERON:0000066", 2)))
 
-cds <- DESeq::newCountDataSet(data_count, condition )
-
-library(edgeR)
+## generate the DGElist 
 
 dge_data <- DGEList(counts=data_count, group = condition)
 
-## filter by the expression
+## filter by the gene expression
 
 dge_keep_index <- filterByExpr(dge_data)
 table(dge_keep_index)
@@ -213,12 +256,11 @@ dge_keep <- dge_data[dge_keep_index, , keep.lib.sizes=FALSE]
 
 dim(dge_keep)
 
-## TMM normalize 
-dge_norm <- calcNormFactors(dge_keep)
-dge_norm$samples
+## TMM normalize by the log2CPM
 
-## check the outliers in the samples
-plotMDS(dge_norm)
+dge_norm <- calcNormFactors(dge_keep)
+
+## construct the model for the analysis
 
 design <- model.matrix(~ condition)
 
@@ -226,41 +268,61 @@ rownames(design) <- colnames(dge_norm)
 
 design
 
+## fit the negative-binomial distribution and calculate the dispersion
+
 fit_NBP <- statmod::fitNBP(dge_norm, group = condition)
 
-plotBCV(fit_NBP)
+## fit the quasi-likelihood
 
 fit_QL <- glmQLFit(dge_norm,design, dispersion = fit_NBP$dispersion)
 
+## plot the QL dispersion scatterplot
+
 plotQLDisp(fit_QL)
+
+## QL F-test for the differential expression analysis
 
 qlf_result <- glmQLFTest(fit_QL)
 
-topTags(qlf_result)
-
 # * Filter the results by providing just genes with FDR < 0.01. Provide a visualization graphic as MA plot. ----
+
+## calculate qvalues
 
 fdr_result <- p.adjust(qlf_result$table$PValue, method = "BH")
 
-sum(fdr_result < 0.01)
+## filter genes with FDR < 0. 01
 
+sum(fdr_result < 0.01)
 ## the genes with FDR < 0.01, totally 7 genes
+
 rownames(qlf_result$table)[which(fdr_result < 0.01)]
 
+## I also use the decideTestDGE() to filter the genes
+
 deGenes <- decideTestsDGE(qlf_result, p=0.01, lfc = 2)
+
 summary(deGenes)
+## the result is the same
+
 detag <- rownames(qlf_result)[as.logical(deGenes)]
+
+## plot the MA plot
 
 plotSmear(qlf_result, de.tags=detag)
 abline(h=c(-2, 2), col='blue')
 
 # * Make a GO analysis. Which type of information do you retrieve? --------
 
+## download the gene annotation information for Drosophila melanogaster
+
 BiocManager::install("org.Dm.eg.db")
 
 library(org.Dm.eg.db)
 library(clusterProfiler)
 library(AnnotationDbi)
+
+## to match the gene ids from org.Dm.eg.db
+## set the ontology as "BP"
 
 go_data <-enrichGO( gene = rownames(qlf_result),
               OrgDb = org.Dm.eg.db,
@@ -270,4 +332,7 @@ go_data <-enrichGO( gene = rownames(qlf_result),
               qvalueCutoff = 0.05,
               readable = T)
 
+## plot the go analysis result
+
 barplot(go_data)
+
