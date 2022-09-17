@@ -316,23 +316,38 @@ abline(h=c(-2, 2), col='blue')
 ## download the gene annotation information for Drosophila melanogaster
 
 BiocManager::install("org.Dm.eg.db")
+BiocManager::install("clusterProfiler")
 
+library(cluserProfiler)
 library(org.Dm.eg.db)
-library(clusterProfiler)
-library(AnnotationDbi)
 
-## to match the gene ids from org.Dm.eg.db
-## set the ontology as "BP"
+## firstly I transcribed the geneid like "FBgn0000014" to the SYMBOL type in 
+## https://biotools.fr/drosophila/fbgn_converter
+## and stored the transcribed SYMBOL as a vector in a .txt file
 
-go_data <-enrichGO( gene = rownames(qlf_result),
-              OrgDb = org.Dm.eg.db,
-              keyType = "ENTREZID",
-              ont = "BP",
-              pvalueCutoff = 0.05,
-              qvalueCutoff = 0.05,
-              readable = T)
+## read the SYMBOL file
 
-## plot the go analysis result
+gene_symbol <- read.table(file.path(working_path, "geneid_symbol.txt"),header = F)$V1
 
-barplot(go_data)
+## then transcribe the SYMBOL into ENTREZID using clusterProfiler
+## org.Dm.eg.db is used to match the SYMBOL and ENTREZID
+
+test <- bitr(gene_symbol, 
+            fromType="SYMBOL", 
+            toType="ENTREZID",  
+            OrgDb="org.Dm.eg.db") 
+
+## do the GO analysis
+go_data <-enrichGO( gene = test$ENTREZID,
+                    OrgDb = org.Dm.eg.db,
+                    keyType = "ENTREZID",
+                    ont = "ALL",
+                    pvalueCutoff = 1,
+                    qvalueCutoff = 1,
+                    readable = T)
+
+
+barplot(go_data, showCategory=20,title="EnrichmentGO")
+dotplot(go_data,title="EnrichmentGO_dot")
+
 
